@@ -1165,25 +1165,11 @@ def generate_image(
         if inpainting_mask is not None:
             image_perturbation.register_hook(lambda grad: grad * inpainting_mask)
 
-
-
-
-
-
         # ORIGINAL
         if attack_size_factor is None:
             collected_images.append(raw_to_real_image((images_to_start_raw + image_perturbation)).detach().cpu().numpy())
         else:
             collected_images.append(np.clip((original_image + attack_size_factor*(raw_to_real_image(images_to_start_raw + image_perturbation) - original_image)).detach().cpu().numpy(),0,1))
-
-        # WAAAAAAAAAAAAAAAAAAAAAAH
-        #if attack_size_factor is None:
-        #    current_image = raw_to_real_image(images_to_start_raw + image_perturbation)
-        #else:
-        #    current_image = original_image + attack_size_factor * (raw_to_real_image(images_to_start_raw + image_perturbation) - original_image)
-        #collected_images.append(current_image.detach().cpu().numpy())
-
-
 
         # --- Compute loss over augmentation batches ---
         losses_split = []
@@ -1234,10 +1220,7 @@ def generate_image(
             ell_infty = np.max(np.abs(collected_images[-1][0] - collected_images[0][0])) * 255
             tqdm_range.set_description(f"Step {step}, Loss: {np.mean(losses):.3f}, ell_inf: {ell_infty:.1f}/255")
 
-        # REMOVED: Undefined plt.savefig call (referenced undefined 'results_dir' and 'version_i')
-
     return collected_images, all_image_perturbations
-
 
 # -----
 # Main
