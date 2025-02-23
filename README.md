@@ -21,7 +21,8 @@ python clip-generate.py --deterministic --make_anti --manu_vit --manu_txt --mode
 - Enable: `--manu_vit` & `--manu_txt` - skip layer (does nothing without Enable): `--set_vit` `--set_txt`
 - To also skip final layer normalization before projection: `--skip_ln_vit` and `--skip_ln_txt`
 - To reduce batch_size (for VRAM) and augs_cp (quality vs. speed), e.g.: `--batch_size 16` & `--augs_cp 32`
-- For all models. Default OpenAI-ViT-B/32: `python clip-generate.py --deterministic --make_anti --manu_vit -set_vit 1 --set_txt 2`
+- For all models. Default OpenAI-ViT-B/32: 
+- `python clip-generate.py --deterministic --make_anti --manu_vit -set_vit 1 --set_txt 2`
 
 ![cats-final](https://github.com/user-attachments/assets/05413481-cda7-4f62-a032-465ef863216b)
 
