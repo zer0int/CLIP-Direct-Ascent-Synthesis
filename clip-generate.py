@@ -139,6 +139,17 @@ parser.add_argument('--no1', action='store_true', help="Skips task #1")
 parser.add_argument('--no2', action='store_true', help="Skips task #2")
 parser.add_argument('--no3', action='store_true', help="Skips task #3")
 parser.add_argument('--no4', action='store_true', help="Skips task #4")
+# Manual layer selection for Vision and Text Encoder. First model (--model_name) OpenAI only.
+parser.add_argument("--manu_vit", action='store_true', help="Use manual final layer (resblock) for Vision Encoder (ViT)")
+parser.add_argument("--manu_txt", action='store_true', help="Use manual final layer (resblock) for Text Encoder (TxT)")
+# SDXL uses penultimate (second-to-last) -2 layer instead of final for CLIP Text Encoder.
+# -1 means final layer (changes nothing), -2 means penultimate, and so on. Counting from back of transformer.
+parser.add_argument('--set_vit', default=2, type=int, help="Manual Final Layer -(int) to use for ViT. Default: 2")
+parser.add_argument('--set_txt', default=2, type=int, help="Manual Final Layer -(int) to use for TxT. Default: 2")
+# Skip the final layer normalization before projection by using these args:
+parser.add_argument("--skip_ln_vit", action='store_true', help="Skip final ViT layer_norm before projection")
+parser.add_argument("--skip_ln_txt", action='store_true', help="Skip final TxT layer_norm before projection")
+
 
 
 args = parser.parse_args()
@@ -169,7 +180,10 @@ vit_neuron = args.vit_neuron
 
 clipname = args.model_name[0].replace("/", "-").replace("@", "-")
 
-
+print_once_v=False
+print_once_t=False
+last_txt = None
+last_vit = None
 # -------
 #  Utils
 # -------
@@ -179,12 +193,87 @@ def get_model_type(model_name):
     normalized_name = model_name.replace("OpenAI-", "").replace("/", "-").strip("'\"")
     return normalized_name
 
+def manu_clip_encode_text(model, text, last=-args.set_txt):
+    global print_once_t
+    global last_txt
+    n_ctx = text.shape[-1]
+    x = model.token_embedding(text)
+    x = x + model.positional_embedding[:n_ctx]
+    x = x.permute(1, 0, 2)
+
+    # Transformer pass with manual layer selection
+    total_layers = len(model.transformer.resblocks)
+    if last < 0:
+        last = total_layers + last
+        if last < 0: # If last would be out of range, reset to use layer 0.
+            print(Fore.RED + Style.BRIGHT + f"Final layer to use out of range with {last}. Setting to layer 0 instead." + Fore.RESET)
+            print(f"Total Layers in the current model: {total_layers}")
+            last = 0
+    last_txt=last
+    if not print_once_t:
+        print(Fore.CYAN + Style.BRIGHT + f"\nSelected as last layer (TxT): {last}" + Fore.RESET)
+        print_once_t=True
+
+    for layer in model.transformer.resblocks[:last + 1]:
+        x = layer(x)
+
+    x = x.permute(1, 0, 2)  # LND -> NLD
+
+    if not args.skip_ln_txt:
+        x = model.ln_final(x)
+
+    x = x[torch.arange(x.shape[0]), text.argmax(dim=-1)] @ model.text_projection
+    return x
+
+def manu_clip_encode_image(model, image, last=-args.set_vit):
+    global print_once_v
+    global last_vit
+    # Initial convolutional (patch) embedding
+    x = model.visual.conv1(image)  # shape = [*, width, grid, grid]
+    x = x.reshape(x.shape[0], x.shape[1], -1)  # shape = [*, width, grid ** 2]
+    x = x.permute(0, 2, 1)  # shape = [*, grid ** 2, width]
+    class_emb = model.visual.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device)
+    x = torch.cat([class_emb, x], dim=1)  # shape = [*, grid ** 2 + 1, width]
+    x = x + model.visual.positional_embedding.to(x.dtype)
+    x = model.visual.ln_pre(x)
+    x = x.permute(1, 0, 2)  # NLD -> LND
+
+    # Transformer pass with manual layer selection
+    total_layers = len(model.visual.transformer.resblocks)
+    if last < 0:
+        last = total_layers + last
+        if last < 0: # If last would be out of range, reset to use layer 0.
+            print(Fore.RED + Style.BRIGHT + f"Final layer to use out of range with {last}. Setting to layer 0 instead." + Fore.RESET)
+            print(f"Total Layers in the current model: {total_layers}")
+            last = 0
+    last_vit=last
+    if not print_once_v:
+        print(Fore.MAGENTA + Style.BRIGHT + f"\nSelected as last layer (ViT): {last}" + Fore.RESET)
+        print_once_v=True
+
+    for layer in model.visual.transformer.resblocks[:last + 1]:
+        x = layer(x)
+
+    x = x.permute(1, 0, 2)  # LND -> NLD
+
+    if args.skip_ln_vit:
+        x = x[:, 0, :] # Do not apply final layer normalization
+    else:
+        x = model.visual.ln_post(x[:, 0, :])
+
+    if model.visual.proj is not None:
+        x = x @ model.visual.proj
+
+    return x
 
 def get_many_text_features(model, tokenizer, texts):
     # If texts is a list of strings, tokenize and encode.
     if isinstance(texts, (list, tuple)) and isinstance(texts[0], str):
         tokenized_text = tokenizer(texts).to("cuda")
-        return model.encode_text(tokenized_text)
+        if args.manu_txt:
+            return manu_clip_encode_text(model, tokenized_text)
+        else:
+            return model.encode_text(tokenized_text)
     # Otherwise, assume texts is already a tensor of embeddings.
     elif isinstance(texts, torch.Tensor):
         return texts
@@ -193,12 +282,18 @@ def get_many_text_features(model, tokenizer, texts):
             "Unexpected type for texts in get_many_text_features.")
 
 def get_many_image_features(model, batch_of_images):
-    image_features = model.encode_image(batch_of_images)
+    if args.manu_vit:
+        image_features = manu_clip_encode_image(model, batch_of_images)
+    else:
+        image_features = model.encode_image(model, batch_of_images)
     return image_features
 
 def loss_between_images_and_text(model, images, text_features, target_values=None):
     text_features_normed = text_features / text_features.norm(dim=-1, keepdim=True)
-    image_features = model.encode_image(images)
+    if args.manu_vit:
+        image_features = manu_clip_encode_image(model, images)
+    else:
+        image_features = model.encode_image(images)
     image_features_normed = image_features / image_features.norm(dim=-1, keepdim=True)
     scores = image_features_normed @ text_features_normed.T
     if target_values is None:
@@ -278,7 +373,7 @@ def load_clip_models(models_to_load):
             model_str = model_str.strip("'\"")
             data_str = data_str.strip("'\"")  # Fix: Clean data_str properly
             model, _, preprocess = open_clip.create_model_and_transforms(model_str, pretrained=data_str)
-            model.to("cuda")
+            model.to("cuda").float()
             tokenizer = open_clip.get_tokenizer(model_str)
 
             mean = preprocess.transforms[-1].mean
@@ -289,7 +384,7 @@ def load_clip_models(models_to_load):
         else: # OpenAI CLIP models
             print(f"Loading {model_str} on data {data_str}")
             model, preprocess = clip.load(model_str.split("OpenAI-")[1])
-            model.to("cuda").eval()
+            model.to("cuda").eval().float()
             tokenizer = clip.tokenize
 
             custom_path = data_str
@@ -349,13 +444,16 @@ def save_images(collected_images, results_dir, next_num, task_type, large_resolu
         extra += 1
     total = versions + extra
 
+    suffix_txt = f"_txt{last_txt}" if last_txt is not None else ""
+    suffix_vit = f"_vit{last_vit}" if last_vit is not None else ""
+
     # Save each individual image separately (no borders, unique filenames)
     for v in range(versions):
         img = collected_images[-1][v][:, offset:offset + original_resolution, offset:offset + original_resolution]
         if img.ndim == 3 and img.shape[0] == 3:
             img = img.transpose(1, 2, 0)  # Convert (C, H, W) to (H, W, C)
 
-        individual_filename = f"{task_type}_{next_num + v}.png"
+        individual_filename = f"{task_type}_{next_num + v}{suffix_txt}{suffix_vit}.png"
         individual_path = os.path.join(results_dir, individual_filename)
 
         plt.imsave(individual_path, np.clip((img * 255).astype(np.uint8), 0, 255))
@@ -394,7 +492,7 @@ def save_images(collected_images, results_dir, next_num, task_type, large_resolu
         else:
             ax.remove()
 
-    combined_filename = f"all_{task_type}_{next_num}.png"
+    combined_filename = f"all_{task_type}_{next_num}{suffix_txt}{suffix_vit}.png"
     combined_path = os.path.join(results_dir, combined_filename)
 
     plt.subplots_adjust(wspace=0.1, hspace=0.1)
@@ -915,7 +1013,7 @@ def train_text_embeddings(img, model, lats, many_tokens, prompt, optimizer, sche
             print(Fore.GREEN + f"Iteration {j}: Average Loss: {current_loss:.3f}" + Fore.RESET)
             checkin(loss, tx, lll, tok, bests, img_name)
             trusted_worst_text_embeddings = copy.deepcopy(tx.detach())
-    
+
     os.makedirs("txtembeds", exist_ok=True)
     if not inverse:
         torch.save(best_text_embeddings, f"txtembeds/{img_name}_text_embedding.pt")
@@ -1130,7 +1228,7 @@ def generate_image(
     else:
         # Use the provided starting image as is and update the batch size.
         np_image_now = starting_image  
-        multiple_generations_at_once = np_image_now.shape[0]  # update batch size to match provided image
+        multiple_generations_at_once = np_image_now.shape[0]
 
     torch_image_raw = real_to_raw_image(torch.Tensor(np_image_now).to("cuda"))
     original_image = torch.Tensor(np_image_now).to("cuda")
@@ -1165,7 +1263,6 @@ def generate_image(
         if inpainting_mask is not None:
             image_perturbation.register_hook(lambda grad: grad * inpainting_mask)
 
-        # ORIGINAL
         if attack_size_factor is None:
             collected_images.append(raw_to_real_image((images_to_start_raw + image_perturbation)).detach().cpu().numpy())
         else:
@@ -1178,7 +1275,6 @@ def generate_image(
             i1 = it * batch_size
             i2 = min((it + 1) * batch_size, image_count)
 
-            #for i_model, (model, _, _, _) in enumerate(models_and_tokenizers):
             for i_model,(model,tokenizer,mean,std) in enumerate(models_and_tokenizers):
                 model.eval()
 
@@ -1187,7 +1283,6 @@ def generate_image(
                 else:
                     image_to_aug = original_image.to("cuda") + attack_size_factor * (raw_to_real_image(images_to_start_raw + image_perturbation) - original_image.to("cuda"))
 
-                # Prepare augmented images (using fixed keyword argument 'count')
                 aug_variations = make_image_augmentations(
                     image_to_aug.to("cuda"),
                     count=(i2 - i1),
@@ -1195,7 +1290,6 @@ def generate_image(
                     noise_scale=noise_scale
                 )
 
-                # FIX: Use aug_variations (was mistakenly using undefined 'image_variations')
                 with autocast("cuda"):
                     loss = -1.0 * loss_between_images_and_text(
                         model,
@@ -1307,7 +1401,7 @@ def main():
 
     # Obtain maximum activating neurons (feature activation visualization) images and append
     if args.use_neuron or args.all_neurons:
-        if isinstance(primary_image, str):  # If path, load the image
+        if isinstance(primary_image, str):
             primary_neuron_image = copy.deepcopy(preprocess(Image.open(primary_image)).unsqueeze(0).to(device))
 
         if not args.all_neurons:
@@ -1317,7 +1411,7 @@ def main():
         if args.all_neurons:
             input_dims, num_layers, num_features = get_clip_vit_dimensions(default_model, preprocess)
 
-            total_layers = num_layers - 1  # Last layer index
+            total_layers = num_layers - 1
             save_paths = {}
 
             for i in range(2, total_layers + 1):  # Start from 2nd layer (0 = input, 1 = second) -> up to final layer
