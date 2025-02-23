@@ -4,6 +4,35 @@
 - With emphasis on *heavily* modified. Alas, please open an Issue on *me* if you encounter one.
 ## Like CLIP + VQGAN. Except without a VQGAN.
 ![banner2](https://github.com/user-attachments/assets/2d64f2fb-51f3-4805-8aae-5bd33d5f755f)
+----
+----
+### ⭐ Update 23-FEB-2025
+
+![cats-compare](https://github.com/user-attachments/assets/cf354db7-6928-4cd6-923c-173d0a683501)
+
+- Add ability to skip layers in Text & Vision Encoder for generating images
+- Counting from the back of the transformer, -1 = last, -2 = penultimate, etc.
+- Examples:
+
+Use CLIP-L penultimate (second-to-last) instead of final text encoder layer (like in SDXL!):
+```
+python clip-generate.py --deterministic --make_anti --manu_vit --manu_txt --model_name "OpenAI-ViT-L/14" --set_vit 1 --set_txt 2
+```
+- Enable: `--manu_vit` & `--manu_txt` - skip layer (does nothing without Enable): `--set_vit` `--set_txt`
+- To also skip final layer normalization before projection: `--skip_ln_vit` and `--skip_ln_txt`
+- To reduce batch_size (for VRAM) and augs_cp (quality vs. speed), e.g.: `--batch_size 16` & `--augs_cp 32`
+- For all models. Default OpenAI-ViT-B/32: `python clip-generate.py --deterministic --make_anti --manu_vit -set_vit 1 --set_txt 2`
+
+![cats-final](https://github.com/user-attachments/assets/05413481-cda7-4f62-a032-465ef863216b)
+
+🤖 Also recommended: (layer 20 (of 0-23, vision), layer 11 (of 0-11, text):
+```
+python clip-generate.py --deterministic --batch_size 16 --augs_cp 32 --make_anti --manu_vit --manu_txt --model_name "OpenAI-ViT-L/14" --set_vit 4 --set_txt 1
+```
+![recommended](https://github.com/user-attachments/assets/36993de5-d0ce-476d-a0e8-574f0e1638b8)
+
+----
+### ⭐ First commit 21-FEB-2025
 
 The original author's code offers:
 
