@@ -8,8 +8,6 @@
 ----
 ### ⭐ Update 23-FEB-2025
 
-![cats-compare](https://github.com/user-attachments/assets/cf354db7-6928-4cd6-923c-173d0a683501)
-
 - Add ability to skip layers in Text & Vision Encoder for generating images
 - Counting from the back of the transformer, -1 = last, -2 = penultimate, etc.
 - Examples:
@@ -24,14 +22,11 @@ python clip-generate.py --deterministic --make_anti --manu_vit --manu_txt --mode
 - For all models. Default OpenAI-ViT-B/32: 
 - `python clip-generate.py --deterministic --make_anti --manu_vit -set_vit 1 --set_txt 2`
 
-![cats-final](https://github.com/user-attachments/assets/05413481-cda7-4f62-a032-465ef863216b)
-
 🤖 Also recommended: (layer 20 (of 0-23, vision), layer 11 (of 0-11, text):
 ```
 python clip-generate.py --deterministic --batch_size 16 --augs_cp 32 --make_anti --manu_vit --manu_txt --model_name "OpenAI-ViT-L/14" --set_vit 4 --set_txt 1
 ```
-![recommended](https://github.com/user-attachments/assets/36993de5-d0ce-476d-a0e8-574f0e1638b8)
-
+![cats-compare](https://github.com/user-attachments/assets/cf354db7-6928-4cd6-923c-173d0a683501)
 ----
 ### ⭐ First commit 21-FEB-2025
 
@@ -84,3 +79,17 @@ python clip-generate.py --model_name "OpenAI-ViT-L/14" "mymodels/finetune.pt" --
 - `python clip-generate.py --help` for a quick review.
 
 ![example-of-all](https://github.com/user-attachments/assets/f11ab1e2-898d-4c9b-bc2d-5045aee4a9c1)
+-----
+
+## Skip Text Encoder layers until just plugging the first layer into projection - a 1-layer #CLIP text encoder!
+
+- ViT-B/32: *fails*
+- ViT-L/14: Relentlessly just makes something else.🦾🤖
+- Banana Cat incomprehensible, make: M + 🍟🤡 and 🕑💥🚶🎑🏡⚽️🧦🌟🔢
+
+![relentless-large](https://github.com/user-attachments/assets/f22c079c-2d23-4d1c-a99c-321a9ade00d5)
+
+## A striking difference in complexity for a 12 layer ViT vs. 24 layer ViT:
+
+![comparisons-final](https://github.com/user-attachments/assets/f8f78ca9-2c2c-48c2-9c61-3a3361bf0129)
+
